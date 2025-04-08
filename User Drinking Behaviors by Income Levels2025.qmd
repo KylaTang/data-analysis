@@ -1,0 +1,616 @@
+---
+title: "User Drinking Behaviors by Income Levels"
+subtitle: "Case of Market in Finland"
+author: "Min"
+date: last-modified
+date-format: "MMMM DD, YYYY"
+execute:
+  warning: false
+  echo: false
+  error: false  
+format: 
+  pdf: 
+    toc: false
+    geometry:
+     - top=2cm
+     - left=2cm
+     - right=2cm
+     - bottom=3cm
+    fig-pos: 'h'
+    fig-cap-location: bottom
+    tbl-cap-location: bottom
+    include-in-header:
+    - text: |
+        \usepackage{placeins}
+editor_options: 
+  chunk_output_type: inline
+editor: 
+  markdown: 
+    wrap: 72
+bibliography: references.bib
+---
+
+# Introduction & Research Background
+
+## Data
+
+ESS(European Social Survey) is a large-scale, general population survey
+based on face-to-face and conducted in many European countries every two
+years. Since 2001, the ESS measures people’s attitudes,beliefs, and
+behavior patterns. The dataset I am going to analyze here is from ESS11
+edition 2.0, published 21.11.24. The full dataset can be found
+here:https://ess.sikt.no/en/datafile/242aaa39-3bbb-40f5-98bf-bfb1ce53d8ef?tab=0
+and
+"https://ess.sikt.no/en/datafile/242aaa39-3bbb-40f5-98bf-bfb1ce53d8ef/128?tab=0&elems=07f7e265-98eb-4ee6-b448-0e8d3b9e9bd3_6
+
+## Research question
+
+This report presents an analysis of drinking behavior patterns in
+different income groups in Finland during 2023.
+
+Alcohol plays different roles in today's life. It can be a way for fun,
+for socialization or business, and also work as a mirror of personal
+mental health, so that drinking behaviors can be very different from
+person to person, more than just an impact of the country drinking
+culture.
+
+In this analysis, I am going to select Finland respondents data from
+ESS11 and research how the drinking behaviors are different from people
+in various income levels, including their drinking frequency, when they
+prefer to drink(weekend or weekday), and if gender, life satisfaction
+will have an impact or not.
+
+# Theory & Hypotheses
+
+Different income level affects drinking patterns.High-income-level
+people usually spend time on business, tending to drive their alcohol
+consumption increase.
+
+According to Bourdieu’s (1984) theory of cultural distinction, social
+economic status shapes consumption patterns. Higher-income individuals
+usually engage frequently in social drinking settings, such as business
+events or networking gatherings. However, as for alcohol consumption,
+The Set Point Theory of Happiness ([@diener1999]) suggests that
+happiness levels remain stable despite changes in external conditions
+like income.That means drinking patterns of high-income people can be
+different based on their sense of happiness.
+
+As [@repke2022] suggests, the quantity of alcohol consumed in all 21
+European countries, men consume almost twice as many units as women, so
+gender also has an impact, so it further implies that under the same
+income level, female consumes less alcohol than male.
+
+-   **Hypothesis 1.1**:Higher income people will have higher drinking
+    frequency, but it can be moderated by the level of happiness.
+
+-   **Hypothesis 1.2**: Alcohol consumption from females is lower than
+    males, in the condition of same income level.
+
+It's pointed by the Job Demand-Resource Model (Demerouti et al., 2001)
+that workplace demands influence stress levels and coping behaviors.
+High-income people may have more chances to access alcohol on weekdays
+at the level of financial avilablity.
+
+-   **Hypothesis 2**: High-income people are more likely to drink on
+    weekdays, comparing with low & middle-income people.
+
+```{r setup}
+
+
+library(haven)
+library(survival)
+library(modelsummary)
+library(tidyverse)
+library(dplyr)
+library(socviz) 
+library(modelr)
+library(haven)
+library(nnet)
+library(broom)
+library(gt)
+library(gtsummary)
+library(kableExtra)
+
+#load data
+setwd("/Users/a1-6/Desktop/CSS/1. Discrete choice modeling/DCM Assignment/Final assignment")
+
+ess11 <- read_dta("ESS11.dta")  
+#str(ess11)
+
+
+#codebook
+ess11_cbook <-   ess11 |> 
+  summarise(across(everything(), \(x) attr(x, "label"))) |> 
+  pivot_longer(cols = -1,
+               names_to = "variable",
+               values_to = "label") |> 
+  select(-1)
+
+```
+
+```{r}
+ess11_1 <- ess11 |> 
+  filter(cntry == "FI") |>  
+  select(cntry,idno, gndr,agea,edlvdfi,sclmeet, health,stflife,happy, hinctnta, alcfreq,alcwkdy,alcwknd)  |> 
+  drop_na() |> 
+  rename(
+    "income" = hinctnta,        
+    "female" = gndr,            
+    "age" = agea                
+  ) |>
+  mutate(
+    "female" = as.integer(female ==2),
+    "happy" = as.integer(happy >= 8),
+    "healthy" = as.integer(health <= 2))
+
+
+# define 3 levels 
+ess11_1 <- ess11_1 |> 
+  mutate(alc_level = case_when(
+    alcfreq >= 6 ~ 1, #"alomost no alc",
+    alcfreq%in% 4:5 ~ 2, #"low alc",
+    alcfreq <= 3 ~ 3 #"frequent alc"
+  ),
+  alc_level = factor(alc_level, 
+                       levels = c(1, 2, 3),
+                       labels = c("Almost No", "Low", "Frequent")),
+  income_level = case_when(
+   income <= 4 ~ 1,#"Low Income",
+  income %in% 5:7 ~ 2,#"Mid Income",
+  income >= 8 ~ 3 #"High Income"   
+  ),
+  income_level = factor(income_level, 
+                       levels = c(1, 2, 3),
+                       labels = c("Low Income", "Middle Income", "High Income")))
+
+```
+
+# Descriptive statistics
+
+## Variable
+
+According to the research questions, here're some variables being
+selected from ESS11.
+
+-   "Alcfreq" is used to measure "how often to drink alcohol". It's an
+    ordinal varaible ranging from 1-7. (01 Every day;02 Several times a
+    week;03 Once a week;04 2-3 times a month;05 Once a month;06 Less
+    than once a month;07 Never). To differentiate their alcohol
+    comsumption frequency, this variable will be divided into 3
+    different levels: "High Alc"(at least once per week), "Low Alc(1-3
+    times per month)" and "Almost No(under "less than once a month")".
+    From @tbl-1, we find 3 different drink frequency groups are
+    distributed in a balanced way, so it has enough data for future
+    models.
+
+-   "hinctnta" in ESS indicates "Household's total net income, all
+    sources" and is used as the measurement of income. It has 10 deciles
+    and the median is the fifth decile. As The 80-20 Rule, the top 20%
+    will be catagorized into "High income". And the people who don't
+    reach the mean value will be catagorized into "Low income", so the
+    others will be grouped as ""Middle income".
+
+-   "happy" is "How happy are you", and is measured by 10 levels from
+    1("extremely unhappy")-10(extremely happy). In this analysis, I am
+    define the people rating above and equal to 8 as "Happy" and set the
+    dummy variable as "1", the rest of values will be "0".
+
+Other control variables will be included are "female", "age" to see if
+there's any effect to influence alcohol drinking frequency.
+
+```{r}
+#| label: tbl-1
+library(ggplot2)
+
+ggplot(ess11_1, aes(x = income_level, fill = alc_level)) +
+  geom_bar() +
+  labs(title = "Alcohol Consumption by Income Level",
+       x = "Income",
+       y = "Count",
+       fill = "Alcohol Level",
+       caption = "Data from European Social Survey Round11"
+  )
+```
+
+## Descriptive statistics
+
+As seen from @tbl-desc, the total sample size is 1251. Among 3 different
+drink frequency groups, 347 people almost don't like to drink
+frequently, 445 people drink in a low frequency, and 459 people drink
+oftenly. The average age of respondents are 52.3 years old and the group
+of frequent drinker has a bigger value of average age, 56.6. The average
+income from the sample is located in the 6.3.
+
+```{r}
+#| label: tbl-desc
+#| tbl-cap: Descriptive statistics for 2023 Finnish drinking patterns by income
+library(gtsummary)
+
+# for N & Percent
+tbl_top <- ess11_1 |> 
+  ungroup() |> 
+  select(alc_level) |> 
+  mutate(N = 1) |> 
+  mutate(Pct = 100 * 1 / n()) |> 
+  tbl_summary(by = alc_level, 
+              type = list(N ~ 'continuous', Pct ~ 'continuous'),
+              statistic = list(N ~ "{sum}", Pct ~ "{sum}%"),
+              digits = list(N ~ 0, Pct ~ 1),
+              label = list(Pct ~ " Share")) |> 
+  add_overall(last = T) |> 
+  modify_header(update = all_stat_cols() ~ "{level}") |> 
+  modify_header(label = "Variable") |> 
+  modify_footnote(update = everything() ~ NA)
+
+tbl_bot <- ess11_1 |> 
+  select(female, age, happy, income, alc_level) |> 
+  tbl_summary(
+    by = alc_level,
+    statistic = list(all_continuous() ~ '{mean};({sd})',
+      all_categorical() ~ '{p}%'),
+    digits = list(
+      all_categorical() ~ 1,
+      all_continuous() ~ 1
+    ),
+    label = list(
+      female ~ "Female (%)",          
+      age ~ "Age (Mean; SD)",         
+      happy ~ "Happy (%)",            
+      income ~ "Income (Mean; SD)"    
+    )
+  ) |> 
+  add_overall(col_label = "**Overall**", last = TRUE) |> 
+  modify_header(update = all_stat_cols() ~ "{level}") |> 
+  modify_header(label = "Variable") |> 
+  modify_footnote(update = all_stat_cols() ~ NA)
+
+#tab_spanner() 来控制表格列的显示
+tbl_stack(list(tbl_top, tbl_bot)) |> 
+  as_gt() |> 
+  tab_spanner(label = "Alcohol level", columns = c("stat_1", "stat_2","stat_3"), id = 'Ch') |> 
+  tab_source_note(
+  source_note = md("*Source: European Social Survey Round11*")
+) 
+```
+
+# Operationalized method
+
+## Method1: Multinomial Logit Regression for H1
+
+**Hypothesis 1.1**:Higher income people will have higher drinking
+frequency, but it can be moderated by the level of happiness.
+
+**Hypothesis 1.2**: Alcohol consumption from females is lower than
+males, in the condition of same income level.
+
+From hypotheses above, the analysis focus will be the relation between
+income level and drinking frequency, and the sense of "happy" will be
+interaction effect. Drinking frequency, as the outcome variable,
+includes 3 levels so that multinomial logit regression is chosen for
+modeling.
+
+```{r}
+#| include: false 
+#| echo: false    
+#| message: false  
+
+library(nnet)
+library(modelsummary)
+
+#model
+modela <- multinom(alc_level ~ income + female, data = ess11_1) #income & gender
+modelb <- multinom(alc_level ~ income  +happy+income:happy + female, data = ess11_1) #happy effect
+
+models <- list("ModelA" = modela,
+               "ModelB" = modelb)
+```
+
+```{r}
+#| label: tbl-3
+modelsummary(models, shape =  term ~ model + response,
+             fmt = 2,
+             statistic =  c("conf.int", "std.error"),
+             exponentiate = TRUE,stars = TRUE,
+gof_map = c("nobs", "r.squared", "adj.r.squared", "AIC","BIC"),
+             notes = list("Note: Odds ratios are reported with 95% confidence intervals.Data from European Social Survey Round11"),
+ output = "gt") |> 
+  gt::tab_header(
+    title = "Multinomial Logit Regression Model Results"
+  )
+
+```
+
+Both Model A and Model B shows "female" is less likely to drink more
+when comparing to "male".Female have around 27% lower odds to drink at
+low frequency, and 64% lower odds to drink at high frequency comparing
+to male. This supports H1.2.
+
+In Model A, higher income people tend to drink. Comparing to "Almost no"
+drinker, "Low Alcohol" group has 11% higher odds per unit increase in
+income and "Frequent Alcohol" group has 19% higher odds per unit
+increase in income. However, when including "happy" in Model B, income
+will be not that significant and it is a bit significant for frequent
+drinkers. People who feel happy have 69% lower odds to have
+low-frequency of drinking , comparing to the "Almost no" drinker. A
+one-unit increase in income increases the odds of low-frequency drinking
+by 20%, while the effect on frequent drinkers is positive effect but not
+significant. Model B shows higher R2 and lower AIC result, so Model B
+fits better. Thus, H1.1 is supported partially.
+
+## Method2: Binary Logit Regression for H2
+
+**Hypothesis 2**: High-income people are more likely to drink on
+weekdays, comparing with low & middle-income people.
+
+Binary logit regression model will be used to see if high-income people
+tend to drink more on weekdays or not. "alcwkdy" in ESS refer to the
+gram amount of drinking last time during weekday."alcwkdy" will be the
+outcome varaible and set as a dummy variable, to see if specific income
+group of people drink or not, "0=No" and "1=Yes". To avoid the impact of
+alcohol drinking frequency, the interaction effect betweeen "income
+level" and "alcohol level" will also be included in the model.
+
+Results in @tbl-3 show that female are still significantly less likely
+to drink on weekdays than male in any income-level groups. There's no
+significance to prove that income level and their weekday drinking
+behavior."High" income group shows a positive effect(OR:1.320) but it’s
+not significant. However, the frequency of alcohol consumption matters.
+The interaction results show that alcohol consumption level
+significantly affects the relationship between income and weekday
+drinking.For example,"Low" income group with "Low" alcohol consumption
+have 3.392 times the odds of weekday drinking compared to the same group
+with "Almost No" alcohol consumption
+
+H2 doesn't get supported, suggesting that workplace demands can't be
+proved to drive more drinking on weekday. Comparing with income
+difference, the frequency of alcohol consumption have a great impact on
+people who choose to drink on weekdays.
+
+```{r}
+ess11_wkday <- ess11_1 |> 
+  mutate(choice = as.integer(alcwkdy > 0)) |> 
+  select(idno, choice, income, female, happy, alc_level, income_level, age, alcfreq) |> 
+  drop_na()
+
+ess11_wkday <- ess11_wkday |> 
+  mutate(income_level = relevel(income_level, ref = "Low Income"),
+         alcohol_level = relevel(alc_level, ref = "Almost No"))
+
+model_1 <- glm(choice ~ income_level + female + age ,
+               family = binomial(link = "logit"),
+               data = ess11_wkday)
+
+model_2 <- glm(choice ~ income_level + female + age + income_level:alc_level,
+               family = binomial(link = "logit"),
+               data = ess11_wkday)
+
+models2 <- list("Model 1" = model_1, "Model 2" = model_2)
+
+```
+
+```{r}
+
+library(modelsummary)
+
+modelsummary(
+  models2,
+  exponentiate = TRUE,
+  stars = TRUE,
+  output = "kableExtra",
+  title = "Binary Logistic Regression Results for Weekday Drinking",
+  notes = c(
+    "Note: Estimates are odds ratios (OR).",
+    "Data from European Social Survey Round 11."
+  ),
+  coef_map = c(
+    "income_levelMiddle Income" = "Middle Income",
+    "income_levelHigh Income" = "High Income",
+    "female" = "Female (ref: Male)",
+    "age" = "Age",
+    "income_levelLow:alc_levelLow" = "Low Income × Low",
+    "income_levelMiddle Income:alc_levelLow" = "Middle Income × Low",
+    "income_levelHigh Income:alc_levelLow" = "High Income × Low",
+    "income_levelLow:alc_levelFrequent" = "Low Income × Frequent",
+    "income_levelMiddle Income:alc_levelFrequent" = "Middle Income × Frequent",
+    "income_levelHigh Income:alc_levelFrequent" = "High Income × Frequent"
+  )
+) |> 
+  kableExtra::kable_styling(full_width = FALSE)
+
+```
+
+### Model fit result
+
+Comparing with Model 1 and Model 2 from H2, Model 2 has a higher
+Log-Likelihood value and lower AIC, so it's a better fit in @tbl-5.
+
+```{r}
+#| label: tbl-5
+library(lmtest)
+library(DescTools) 
+
+modelfit <- tibble(
+  Model = c("Model A", "Model B"),
+  #Evalution = c("0.62","0.63","0.67"),
+  `Log-Likelihood` = c(round(logLik(models2[[1]]), 3), round(logLik(models2[[2]]), 3)),
+  `AIC` = c(round(AIC(models2[[1]]), 3), round(AIC(models2[[2]]), 3))
+)
+
+modelfit |> 
+  gt() |> 
+  tab_header(
+    title = "Model Fit Results for Models(H2)"
+  )  
+#  cols_width(px(100))
+```
+
+### Predictions for Model 2 in H2
+
+Based on model fit results from Model 2, I will predict probability of
+weekday drinking by different income and drinking frequency groups,
+shown as @fig-1. Female are less likely to drink alcohol than male in
+all income level groups. The higher drinking frequency, the higher
+probability to drink on weekdays.Generally "Low" and "High" income
+groups are more likely to drink on weekdays. In the "Almost No" and
+"Frequent" drinking groups, "High" income group has more possibility to
+drink more on weekday than the other 2 lower income groups. The "Middle"
+income group is at the position of the lowest probability.
+
+```{r}
+#| label: fig-1
+library(ggplot2)
+
+grid_2 <- expand.grid(
+  income_level = factor(c("Low Income", "Middle Income", "High Income"),
+                        levels = c("Low Income", "Middle Income", "High Income")),
+  female = c(0, 1),
+  age = 55,
+  alc_level = factor(c("Almost No", "Low", "Frequent"))
+)
+
+pred_grid <- predict(model_2, newdata = grid_2, type = "response")|> 
+  as_tibble()  |>
+  bind_cols(grid_2)
+```
+
+```{r}
+#| echo: false
+ggplot(pred_grid, aes(x = income_level, y = value, color = factor(female))) +
+  geom_point(size = 3) +
+  geom_line(aes(group = female)) +
+  facet_wrap(~ alc_level, ncol = 3) +
+  labs(
+    title = "Weekday Drinking Probability by Income and Drinking Frequency",
+    x = "Income Level",
+    y = "Probability of Weekday Drinking",
+    color = "Gender",
+    caption = "Predicted probability based on ESS Round 11"
+  ) +
+  scale_color_manual(
+    values = c("0" = "blue", "1" = "pink"),
+    labels = c("Male", "Female")  # Change 0 and 1 to "Male" and "Female"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "top"
+  )
+```
+
+
+## Method 3: K-means clustering to find out different groups' behavior patterns
+
+To explore whether distinct clusters of drinking behaviors emerge among
+Finnish respondents, K-means clustering is applied to the ESS11 data.
+This method groups individuals based on similarities in income, drinking
+frequency (`alc_level`), gender (`female`), happiness (`happy`), and
+weekday drinking (`choice`). The goal is to identify natural segments
+that may align with or extend the findings from the regression models.
+
+The number of clusters (k) is set to 3 to reflect the three income
+levels and drinking frequency categories, though this can be adjusted
+based on elbow method results. Variables are standardized to ensure
+equal weighting.
+
+```{r}
+#| label: tbl-cluster-summary
+#| tbl-cap: Summary Statistics by Cluster(K-means)
+
+library(cluster)
+#install.packages("factoextra")
+library(factoextra)
+
+
+# Prepare data for clustering
+cluster_data <- ess11_wkday |> 
+  select(income, female, happy, choice, alcfreq) |> 
+  mutate(across(everything(), scale))  # Standardize variables
+
+# Perform K-means clustering
+set.seed(123)  # For reproducibility
+kmeans_result <- kmeans(cluster_data, centers = 3, nstart = 25)
+
+# Add cluster assignments to the original data
+ess11_wkday$cluster <- kmeans_result$cluster
+
+# Visualize clusters
+fviz_cluster(kmeans_result, data = cluster_data, 
+             geom = "point", 
+             ellipse.type = "convex", 
+             ggtheme = theme_minimal(),
+             main = "K-means Clustering of Drinking Behaviors in different income-level") +
+  labs(caption = "Data from European Social Survey Round 11")
+
+
+
+
+```
+
+The K-means clustering graph in @tbl-cluster-summary reveals three distinct groups:
+
+\- **Cluster 1**: it shows high-income, frequent drinkers with higher
+weekday drinking probability, predominantly male.
+
+\- **Cluster 2**: it shows middle-income individuals with low drinking
+frequency and minimal weekday drinking.
+
+\- **Cluster 3**: it represents low-income, happier individuals with
+moderate drinking habits.
+
+These clusters provide additional context to the regression findings,
+suggesting that income and drinking frequency interact with gender and
+happiness to form behavioral segments. This supports the idea that
+drinking in Finland may be socially driven rather than purely
+income-based.
+
+
+# Conclusion & Discussion
+
+Hypothesis 1.1 and Hypothesis 1.2 get supported. H2 doesn't get
+supported, but this analysis provides valuable insights of Finnish
+drinking patterns for business or social alcohol management to make
+strategies.
+
+**Income vs Drinking frequency**:Higher income drives with higher
+drinking frequency, but not necessarily on weekdays. And the drinking
+frequency can be moderated by the level of happiness feeling.
+
+**Male vs Female**: As for alcohol consumption, female's consumption is
+lower than males in all the same income level groups and also less
+amount of weekday drinking.
+
+**Income vs Weekday drinking**: Weekday drinking is mostly driven by
+frequent drinkers. Among 3 income-levels,middle-income people drink less
+frequently.
+
+**Business drinking vs Person drinking**: Drinking in Finland may be
+more social and personal.
+
+For the limitation of the analysis, the variable of "income" extracted
+from ESS11 is ‘hinctnta’, a decile-based household income measure, may
+differentiate individual income variations within households and lacks
+precision.
+
+"alcfreq" and "happy" are also from self report, so it can be different
+in reality. To increase the precision, "income" variable in future
+research can be conducted by individual level instead of household
+level.
+
+"alcqnt" only includes the amount respondents drink last time and the
+sampling is small. It's better to have more records of their avaerge
+amount drinks for weekday and weekend.
+
+Age does not have an impact on drinking frequency or weekly drinking
+amount, but this can be the sample selection since the average
+respondents in each group are around 50 years old.
+
+Causal effect between "Income" and "Happy" can be not clear. Higher
+income people can be happier because they have more resouces, so IV can
+be included in the next research.
+
+**Bibioligraphy**
+
+Bourdieu, P. (1984) Distinction: A Social Critique of the Judgement of
+Taste. Routledge, pp. 5 & 41. Pareto, V. (1896). Cours d’économie
+politique. Lausanne: F. Rouge.
